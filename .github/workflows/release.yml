@@ -1,0 +1,25 @@
+# Push a tag like v0.1.1 (matching Cargo.toml) to build and publish a release.
+# The in-app updater downloads NetPulse-Setup.exe / NetPulse-portable.zip from the latest release.
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+      - name: Build
+        shell: pwsh
+        run: ./build.ps1
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/NetPulse-Setup.exe dist/NetPulse-portable.zip --title "NetPulse ${{ github.ref_name }}" --generate-notes

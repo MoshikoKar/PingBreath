@@ -1,0 +1,289 @@
+﻿export struct TargetView {
+    name: string,
+    host: string,
+    latency: string,
+    live: string,       // live-window stats: avg / jitter / loss
+    summary24: string,  // 24 h: uptime / max
+    status: int,        // 0 waiting, 1 good, 2 degraded, 3 bad
+    spark: string,
+    hours: [int],       // 24 hourly health codes, oldest first
+}
+
+global Palette {
+    out property <color> card: #111827;
+    out property <color> tile: #ffffff0d;
+    out property <color> text: #e5e7eb;
+    out property <color> muted: #9ca3af;
+    out property <color> good: #3ddc84;
+    out property <color> warn: #ffb300;
+    out property <color> bad: #ff5252;
+    out property <color> idle: #6b7280;
+
+    public pure function status-color(s: int) -> color {
+        return s == 1 ? self.good : s == 2 ? self.warn : s == 3 ? self.bad : self.idle;
+    }
+}
+
+// Small flat header button; glyph is drawn with a Path so it renders identically everywhere.
+component IconButton inherits Rectangle {
+    in property <string> glyph; // SVG path in a 10x10 box
+    in property <color> hover-color: #ffffff1f;
+    callback clicked;
+
+    width: 24px;
+    height: 20px;
+    border-radius: 5px;
+    background: ta.has-hover ? hover-color : transparent;
+
+    Path {
+        width: 8px;
+        height: 8px;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        commands: root.glyph;
+        stroke: ta.has-hover ? white : Palette.text;
+        stroke-width: 1.8px;
+        stroke-line-cap: round;
+        fill: transparent;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component Row inherits Rectangle {
+    in property <TargetView> t;
+    property <color> accent: Palette.status-color(t.status);
+
+    height: 62px;
+    border-radius: 8px;
+    background: Palette.tile;
+
+    VerticalLayout {
+        padding-left: 9px;
+        padding-right: 9px;
+        padding-top: 5px;
+        padding-bottom: 5px;
+        spacing: 2px;
+
+        // name / host ........ latency
+        HorizontalLayout {
+            height: 18px;
+            spacing: 6px;
+            Rectangle {
+                width: 6px;
+                Rectangle {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: root.accent;
+                }
+            }
+            Text {
+                text: t.name;
+                color: Palette.text;
+                font-size: 12px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            Text {
+                text: t.host;
+                color: Palette.muted;
+                font-size: 9px;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: t.latency;
+                color: root.accent;
+                font-size: 14px;
+                font-weight: 700;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+        }
+
+        // live sparkline
+        Rectangle {
+            height: 16px;
+            Path {
+                width: parent.width;
+                height: parent.height;
+                viewbox-width: 100;
+                viewbox-height: 24;
+                commands: t.spark;
+                stroke: root.accent;
+                stroke-width: 1px;
+                stroke-line-join: round;
+                fill: transparent;
+            }
+        }
+
+        // 24 h health strip, one segment per hour
+        HorizontalLayout {
+            height: 3px;
+            spacing: 1px;
+            for h in t.hours: Rectangle {
+                border-radius: 1px;
+                background: h == 0 ? #ffffff14 : Palette.status-color(h);
+            }
+        }
+
+        // footer
+        HorizontalLayout {
+            height: 11px;
+            spacing: 6px;
+            Text {
+                text: t.live;
+                color: Palette.muted;
+                font-size: 8px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: t.summary24;
+                color: Palette.muted;
+                font-size: 8px;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    in property <[TargetView]> targets;
+    in property <string> network: "detecting network...";
+    in property <string> status-text: "starting...";
+    in property <int> overall: 0;
+    in-out property <bool> on-top: true;
+    in-out property <bool> locked: false;
+
+    callback drag(length, length);
+    callback hide-clicked();
+    callback quit-clicked();
+    callback toggle-top();
+    callback toggle-lock();
+    callback edit-config();
+    callback reload-config();
+    callback check-update();
+    in property <string> version;
+
+    no-frame: true;
+    always-on-top: root.on-top;
+    background: transparent;
+    title: "NetPulse";
+    icon: @image-url("../assets/icon.png");
+    width: 280px;
+
+    Rectangle {
+        background: Palette.card;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: #ffffff1f;
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 5px;
+
+            // header (drag handle)
+            Rectangle {
+                height: 26px;
+                TouchArea {
+                    mouse-cursor: root.locked ? default : move;
+                    moved => {
+                        if (!root.locked) {
+                            root.drag(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y);
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Image {
+                        source: @image-url("../assets/icon.png");
+                        width: 20px;
+                        height: 20px;
+                        y: 3px;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 0px;
+                        Text {
+                            text: "NetPulse";
+                            color: Palette.text;
+                            font-size: 11px;
+                            font-weight: 700;
+                        }
+                        Text {
+                            text: root.network;
+                            color: Palette.muted;
+                            font-size: 8px;
+                            overflow: elide;
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    // status pill
+                    Rectangle {
+                        width: pill.preferred-width + 12px;
+                        height: 15px;
+                        y: 5px;
+                        border-radius: 8px;
+                        background: Palette.status-color(root.overall).with-alpha(0.18);
+                        pill := Text {
+                            text: root.status-text;
+                            color: Palette.status-color(root.overall);
+                            font-size: 8px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                    }
+                    // X only hides to the tray; quit lives in the tray icon's menu.
+                    IconButton {
+                        y: 3px;
+                        glyph: "M 1 1 L 9 9 M 9 1 L 1 9";
+                        clicked => { root.hide-clicked(); }
+                    }
+                }
+            }
+
+            // targets
+            for t in root.targets: Row { t: t; }
+        }
+
+        // Right-click anywhere opens the menu (left clicks / drag pass through).
+        ContextMenuArea {
+            Menu {
+                MenuItem {
+                    title: root.on-top ? "✓ Always on top" : "Always on top";
+                    activated => { root.toggle-top(); }
+                }
+                MenuItem {
+                    title: root.locked ? "✓ Lock position" : "Lock position";
+                    activated => { root.toggle-lock(); }
+                }
+                MenuSeparator {}
+                MenuItem {
+                    title: "Edit destinations...";
+                    activated => { root.edit-config(); }
+                }
+                MenuItem {
+                    title: "Reload config";
+                    activated => { root.reload-config(); }
+                }
+                MenuSeparator {}
+                MenuItem {
+                    title: "Check for updates (v" + root.version + ")";
+                    activated => { root.check-update(); }
+                }
+                MenuSeparator {}
+                MenuItem {
+                    title: "Hide to tray";
+                    activated => { root.hide-clicked(); }
+                }
+            }
+        }
+    }
+}

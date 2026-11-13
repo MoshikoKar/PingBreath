@@ -1,0 +1,30 @@
+/target
+/dist
+
+# Local / packaged binaries (built via build.ps1)
+/NetPulse.exe
+*.exe
+!installer/
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+credentials.json
+**/secrets/**
+
+# OS junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor / local
+.idea/
+*.swp
+*.swo
+
+# Rust / tooling
+**/*.rs.bk
+.cargo-cache/
