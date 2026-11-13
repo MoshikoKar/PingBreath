@@ -22,4 +22,16 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/NetPulse-Setup.exe dist/NetPulse-portable.zip --title "NetPulse ${{ github.ref_name }}" --generate-notes
+        run: |
+          $sums = Get-Content dist/SHA256SUMS.txt -Raw
+          @"
+          ## Downloads
+          - **NetPulse-Setup.exe** - installer (per-user, optional start with Windows)
+          - **NetPulse-portable.zip** - no install; settings kept next to the exe
+
+          ## SHA-256
+          ``````
+          $sums
+          ``````
+          "@ -replace '(?m)^ {10}','' | Set-Content notes.md
+          gh release create "${{ github.ref_name }}" dist/NetPulse-Setup.exe dist/NetPulse-portable.zip dist/SHA256SUMS.txt --title "NetPulse ${{ github.ref_name }}" --notes-file notes.md --generate-notes

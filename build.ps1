@@ -43,4 +43,10 @@ if (-not $SkipSetup) {
     }
 }
 
+# SHA-256 checksums for the release files
+$sums = Get-ChildItem $dist -File | Where-Object { $_.Name -in 'NetPulse-Setup.exe','NetPulse-portable.zip' } |
+    ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }
+Set-Content -Path (Join-Path $dist 'SHA256SUMS.txt') -Value $sums
+$sums | ForEach-Object { Write-Host $_ }
+
 Get-ChildItem $dist | Format-Table Name, @{n='MB';e={[math]::Round($_.Length/1MB,2)}}
