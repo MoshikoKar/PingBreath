@@ -18,7 +18,8 @@ if ($LASTEXITCODE) { throw 'cargo build failed' }
 $dist = Join-Path $PSScriptRoot 'dist'
 Remove-Item $dist -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory $dist | Out-Null
-Copy-Item target\release\netpulse.exe (Join-Path $dist 'NetPulse.exe')
+$tgt = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $PSScriptRoot 'target' }
+Copy-Item (Join-Path $tgt 'release\netpulse.exe') (Join-Path $dist 'NetPulse.exe')
 
 # Portable zip
 $stage = Join-Path $dist '_portable'

@@ -23,15 +23,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $ver = "${{ github.ref_name }}".TrimStart('v')
           $sums = Get-Content dist/SHA256SUMS.txt -Raw
-          @"
-          ## Downloads
-          - **NetPulse-Setup.exe** - installer (per-user, optional start with Windows)
-          - **NetPulse-portable.zip** - no install; settings kept next to the exe
-
-          ## SHA-256
-          ``````
-          $sums
-          ``````
-          "@ -replace '(?m)^ {10}','' | Set-Content notes.md
-          gh release create "${{ github.ref_name }}" dist/NetPulse-Setup.exe dist/NetPulse-portable.zip dist/SHA256SUMS.txt --title "NetPulse ${{ github.ref_name }}" --notes-file notes.md --generate-notes
+          # Changelog section for this version (between its "## [x]" heading and the next one)
+          $log = Get-Content CHANGELOG.md -Raw
+          $m = [regex]::Match($log, "(?ms)^## \[$([regex]::Escape($ver))\][^\n]*\n(.*?)(?=^## \[|\z)")
+          $changes = if ($m.Success) { $m.Groups[1].Value.Trim() } else { "See the commit history." }
+          $fence = '`' * 3
+          $notes = "## Changes`n`n$changes`n`n## Downloads`n- **NetPulse-Setup.exe** - installer (per-user, optional start with Windows)`n- **NetPulse-portable.zip** - no install; settings kept next to the exe`n`n## SHA-256`n$fence`n$sums$fence`n"
+          Set-Content -Path notes.md -Value $notes
+          $files = @('dist/NetPulse-Setup.exe', 'dist/NetPulse-portable.zip', 'dist/SHA256SUMS.txt')
+          $opts = @('--title', "NetPulse ${{ github.ref_name }}", '--notes-file', 'notes.md')
+          if ($ver -match '-') { $opts += '--prerelease' }
+          gh release create "${{ github.ref_name }}" @files @opts

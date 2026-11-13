@@ -29,7 +29,10 @@ Source: "..\dist\NetPulse.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\NetPulse"; Filename: "{app}\NetPulse.exe"
-Name: "{userstartup}\NetPulse"; Filename: "{app}\NetPulse.exe"; Tasks: startup
+
+[Registry]
+; Same Run-key value the in-app "Start with Windows" toggle reads and writes.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "NetPulse"; ValueData: """{app}\NetPulse.exe"""; Tasks: startup; Flags: uninsdeletevalue
 
 [Run]
 ; Not skipifsilent: after a silent self-update the app comes back up on its own.

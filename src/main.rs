@@ -4,6 +4,7 @@ mod config;
 mod history;
 mod net;
 mod ping;
+mod sys;
 mod update;
 
 use std::cell::Cell;
@@ -11,7 +12,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use slint::{
     ComponentHandle, LogicalPosition, Model, ModelRc, PhysicalPosition, SharedString, Timer, TimerMode, VecModel,
@@ -24,6 +25,8 @@ slint::include_modules!();
 struct Worker {
     name: String,
     host: String,
+    warn_ms: u32,
+    bad_ms: u32,
     shared: ping::Shared,
 }
 
@@ -65,7 +68,7 @@ fn build_view(w: &Worker, s: &ping::Stats) -> TargetView {
         None => ("…".to_string(), 0),
         Some(None) => ("timeout".to_string(), 3),
         Some(Some(0)) => ("<1 ms".to_string(), 1),
-        Some(Some(ms)) => (format!("{ms} ms"), if *ms < 80 { 1 } else if *ms < 200 { 2 } else { 3 }),
+        Some(Some(ms)) => (format!("{ms} ms"), if *ms < w.warn_ms { 1 } else if *ms < w.bad_ms { 2 } else { 3 }),
     };
 
     let loss = if samples.is_empty() {
@@ -129,6 +132,11 @@ fn snapshot_history(workers: &[Worker]) -> HashMap<String, Vec<history::Bucket>>
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    // One instance only; `--wait` (used by Reload) waits for the old instance to exit.
+    let _instance = match sys::single_instance(std::env::args().any(|a| a == "--wait")) {
+        Some(g) => g,
+        None => return Ok(()),
+    };
     let cfg = config::load();
     let stop = Arc::new(AtomicBool::new(false));
 
@@ -140,6 +148,8 @@ fn main() -> Result<(), slint::PlatformError> {
             .map(|t| Worker {
                 name: t.name.clone(),
                 host: t.host.clone(),
+                warn_ms: t.warn_ms.unwrap_or(80),
+                bad_ms: t.bad_ms.unwrap_or(200).max(t.warn_ms.unwrap_or(80)),
                 shared: ping::spawn(
                     t.host.clone(),
                     interval,
@@ -154,9 +164,15 @@ fn main() -> Result<(), slint::PlatformError> {
     let ui = MainWindow::new()?;
     ui.set_on_top(cfg.always_on_top);
     ui.set_locked(cfg.locked);
-    if let (Some(x), Some(y)) = (cfg.x, cfg.y) {
+    // Restore the saved position only if it is still on a connected monitor.
+    let saved_pos = match (cfg.x, cfg.y) {
+        (Some(x), Some(y)) if sys::position_visible(x, y) => Some((x, y)),
+        _ => None,
+    };
+    if let Some((x, y)) = saved_pos {
         ui.window().set_position(PhysicalPosition::new(x, y));
     }
+    ui.set_startup(sys::startup_enabled());
 
     // Drag the frameless window by its header (ignored while locked).
     {
@@ -178,6 +194,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let show_item = MenuItem::new("Show / Hide (minimize to tray)", true, None);
     let top_item = CheckMenuItem::new("Always on top", true, cfg.always_on_top, None);
     let lock_item = CheckMenuItem::new("Lock position", true, cfg.locked, None);
+    let startup_item = CheckMenuItem::new("Start with Windows", true, sys::startup_enabled(), None);
     let edit_item = MenuItem::new("Edit destinations...", true, None);
     let reload_item = MenuItem::new("Reload config", true, None);
     let update_item = MenuItem::new(format!("Check for updates (v{})", update::VERSION), true, None);
@@ -188,6 +205,7 @@ fn main() -> Result<(), slint::PlatformError> {
         &PredefinedMenuItem::separator(),
         &top_item,
         &lock_item,
+        &startup_item,
         &PredefinedMenuItem::separator(),
         &edit_item,
         &reload_item,
@@ -259,6 +277,18 @@ fn main() -> Result<(), slint::PlatformError> {
             config::update(|c| c.locked = on);
         })
     };
+    let set_startup: Rc<dyn Fn(bool)> = {
+        let w = ui.as_weak();
+        let item = startup_item.clone();
+        Rc::new(move |on| {
+            sys::set_startup(on);
+            let actual = sys::startup_enabled();
+            item.set_checked(actual);
+            if let Some(ui) = w.upgrade() {
+                ui.set_startup(actual);
+            }
+        })
+    };
     let edit_config: Rc<dyn Fn()> = Rc::new(|| {
         config::load(); // make sure the file exists
         let _ = std::process::Command::new("notepad").arg(config::path()).spawn();
@@ -268,7 +298,7 @@ fn main() -> Result<(), slint::PlatformError> {
         Rc::new(move || {
             q(); // saves position + history first
             if let Ok(exe) = std::env::current_exe() {
-                let _ = std::process::Command::new(exe).spawn();
+                let _ = std::process::Command::new(exe).arg("--wait").spawn();
             }
         })
     };
@@ -287,6 +317,12 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_toggle_lock(move || {
             if let Some(ui) = w.upgrade() {
                 f(!ui.get_locked());
+            }
+        });
+        let (w, f) = (ui.as_weak(), set_startup.clone());
+        ui.on_toggle_startup(move || {
+            if let Some(ui) = w.upgrade() {
+                f(!ui.get_startup());
             }
         });
         let f = edit_config.clone();
@@ -320,6 +356,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let (top_id, lock_id) = (top_item.id().clone(), lock_item.id().clone());
         let (edit_id, reload_id) = (edit_item.id().clone(), reload_item.id().clone());
         let update_id = update_item.id().clone();
+        let startup_id = startup_item.id().clone();
+        let notify = cfg.notifications;
+        let (mut bad_since, mut ok_since, mut notified): (Option<Instant>, Option<Instant>, bool) = (None, None, false);
         timer.start(TimerMode::Repeated, Duration::from_millis(400), move || {
             if update::QUIT_REQUESTED.load(Ordering::Relaxed) {
                 quit();
@@ -328,6 +367,8 @@ fn main() -> Result<(), slint::PlatformError> {
             while let Ok(ev) = MenuEvent::receiver().try_recv() {
                 if ev.id == update_id {
                     update::check_async(true);
+                } else if ev.id == startup_id {
+                    set_startup(startup_item.is_checked());
                 }
                 if ev.id == show_id {
                     toggle();
@@ -351,6 +392,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
             let mut views = Vec::with_capacity(workers.len());
             let mut worst = 0;
+            let mut bad_names: Vec<String> = Vec::new();
             let mut network = String::from("no network gateway");
             for wk in workers.iter() {
                 let s = wk.shared.lock().unwrap();
@@ -361,7 +403,32 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
                 let v = build_view(wk, &s);
                 worst = worst.max(v.status);
+                if v.status == 3 {
+                    bad_names.push(wk.name.clone());
+                }
                 views.push(v);
+            }
+            // Outage / recovery toasts, debounced to 5 s so a single dropped ping stays quiet.
+            if notify {
+                let hold = Duration::from_secs(5);
+                if worst == 3 {
+                    ok_since = None;
+                    let since = *bad_since.get_or_insert_with(Instant::now);
+                    if !notified && since.elapsed() >= hold {
+                        notified = true;
+                        sys::toast("NetPulse: connection problem", &format!("Unreachable / bad: {}", bad_names.join(", ")));
+                    }
+                } else if worst > 0 {
+                    bad_since = None;
+                    if notified {
+                        let since = *ok_since.get_or_insert_with(Instant::now);
+                        if since.elapsed() >= hold {
+                            notified = false;
+                            ok_since = None;
+                            sys::toast("NetPulse: back to normal", "All targets are responding again.");
+                        }
+                    }
+                }
             }
             if let Some(ui) = w.upgrade() {
                 ui.set_network(network.into());
@@ -386,7 +453,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.show()?;
     hide_from_taskbar();
     Timer::single_shot(Duration::from_millis(300), hide_from_taskbar);
-    if cfg.x.is_none() {
+    if saved_pos.is_none() {
         ui.window().set_position(LogicalPosition::new(40.0, 40.0));
     }
     slint::run_event_loop_until_quit()

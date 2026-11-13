@@ -14,7 +14,7 @@ use windows::core::PCWSTR;
 
 pub const REPO: &str = "MoshikoKar/NetPulse";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-const NO_WINDOW: u32 = 0x0800_0000;
+use crate::sys::NO_WINDOW;
 
 /// Set by the updater thread once the replacement has been launched; the UI timer then quits.
 pub static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -23,19 +23,36 @@ static BUSY: AtomicBool = AtomicBool::new(false);
 struct Release {
     version: String,
     url: String,
+    asset: String,
+    sums_url: String,
     notes_url: String,
 }
 
-fn parse(v: &str) -> Vec<u32> {
-    v.trim().trim_start_matches('v').split('.').map(|p| p.parse().unwrap_or(0)).collect()
+fn split_version(v: &str) -> (Vec<u32>, Option<String>) {
+    let v = v.trim().trim_start_matches('v');
+    let v = v.split('+').next().unwrap_or(v);
+    let (core, pre) = match v.split_once('-') {
+        Some((c, p)) => (c, Some(p.to_string())),
+        None => (v, None),
+    };
+    (core.split('.').map(|p| p.parse().unwrap_or(0)).collect(), pre)
 }
 
+/// Numeric semver compare; a release beats its own pre-release (0.2.0 > 0.2.0-beta.1).
 fn is_newer(remote: &str, local: &str) -> bool {
-    let (mut a, mut b) = (parse(remote), parse(local));
+    let ((mut a, ap), (mut b, bp)) = (split_version(remote), split_version(local));
     let n = a.len().max(b.len());
     a.resize(n, 0);
     b.resize(n, 0);
-    a > b
+    match a.cmp(&b) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => match (ap, bp) {
+            (None, Some(_)) => true,
+            (Some(x), Some(y)) => x > y,
+            _ => false,
+        },
+    }
 }
 
 fn installed_via_setup() -> bool {
@@ -57,18 +74,68 @@ fn curl(args: &[&str]) -> Result<Vec<u8>, String> {
 }
 
 fn latest() -> Result<Release, String> {
-    let body = curl(&[&format!("https://api.github.com/repos/{REPO}/releases/latest")])
-        .map_err(|e| format!("Could not reach GitHub: {e}"))?;
+    let beta = crate::config::load().update_channel.eq_ignore_ascii_case("beta");
+    let api = if beta {
+        format!("https://api.github.com/repos/{REPO}/releases?per_page=10")
+    } else {
+        format!("https://api.github.com/repos/{REPO}/releases/latest")
+    };
+    let body = curl(&[&api]).map_err(|e| format!("Could not reach GitHub: {e}"))?;
     let j: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+    // beta channel: newest release of any kind (the list is newest first)
+    let j = if beta { j.get(0).cloned().ok_or("no releases published")? } else { j };
     let tag = j["tag_name"].as_str().ok_or("release has no tag")?.to_string();
     let wanted = if installed_via_setup() { "NetPulse-Setup.exe" } else { "NetPulse-portable.zip" };
-    let url = j["assets"]
-        .as_array()
-        .and_then(|a| a.iter().find(|x| x["name"] == wanted))
-        .and_then(|x| x["browser_download_url"].as_str())
-        .ok_or_else(|| format!("release {tag} has no {wanted} asset"))?
-        .to_string();
-    Ok(Release { version: tag.trim_start_matches('v').to_string(), url, notes_url: j["html_url"].as_str().unwrap_or("").to_string() })
+    let find = |name: &str| {
+        j["assets"]
+            .as_array()
+            .and_then(|a| a.iter().find(|x| x["name"] == name))
+            .and_then(|x| x["browser_download_url"].as_str())
+            .map(str::to_string)
+    };
+    Ok(Release {
+        version: tag.trim_start_matches('v').to_string(),
+        url: find(wanted).ok_or_else(|| format!("release {tag} has no {wanted} asset"))?,
+        asset: wanted.to_string(),
+        sums_url: find("SHA256SUMS.txt")
+            .ok_or_else(|| format!("release {tag} has no SHA256SUMS.txt - refusing to update unverified"))?,
+        notes_url: j["html_url"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+/// SHA-256 of a file via certutil (ships with Windows).
+fn sha256_of(path: &std::path::Path) -> Result<String, String> {
+    let out = Command::new("certutil.exe")
+        .args(["-hashfile", &path.to_string_lossy(), "SHA256"])
+        .creation_flags(NO_WINDOW)
+        .output()
+        .map_err(|e| format!("could not run certutil: {e}"))?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.replace(' ', "").to_lowercase())
+        .find(|l| l.len() == 64 && l.chars().all(|c| c.is_ascii_hexdigit()))
+        .ok_or_else(|| "could not compute SHA-256".to_string())
+}
+
+/// Download `rel.url` to `dest` and check it against the release's SHA256SUMS.txt before anything runs.
+fn download_verified(rel: &Release, dest: &std::path::Path) -> Result<(), String> {
+    let sums = curl(&[&rel.sums_url]).map_err(|e| format!("Could not fetch checksums: {e}"))?;
+    let expected = String::from_utf8_lossy(&sums)
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            let (hash, name) = (it.next()?, it.next()?);
+            (name.trim_start_matches('*') == rel.asset).then(|| hash.to_lowercase())
+        })
+        .next()
+        .ok_or_else(|| format!("SHA256SUMS.txt has no entry for {}", rel.asset))?;
+    curl(&["-o", &dest.to_string_lossy(), &rel.url]).map_err(|e| format!("Download failed: {e}"))?;
+    let actual = sha256_of(dest)?;
+    if actual != expected {
+        let _ = std::fs::remove_file(dest);
+        return Err(format!("Checksum mismatch - download discarded.\nexpected {expected}\nactual   {actual}"));
+    }
+    Ok(())
 }
 
 fn message_box(text: &str, flags: MESSAGEBOX_STYLE) -> MESSAGEBOX_RESULT {
@@ -88,18 +155,19 @@ fn apply(rel: &Release) -> Result<(), String> {
 
     if installed_via_setup() {
         let setup = tmp.join("NetPulse-Setup.exe");
-        curl(&["-o", setup.to_str().unwrap_or_default(), &rel.url]).map_err(|e| format!("Download failed: {e}"))?;
+        download_verified(rel, &setup)?;
         Command::new(&setup)
             .args(["/SILENT", "/CLOSEAPPLICATIONS", "/NORESTART"])
             .spawn()
             .map_err(|e| format!("Could not start installer: {e}"))?;
     } else {
         let zip = tmp.join("NetPulse-portable.zip");
-        curl(&["-o", zip.to_str().unwrap_or_default(), &rel.url]).map_err(|e| format!("Download failed: {e}"))?;
+        download_verified(rel, &zip)?;
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         // Wait for this process to exit, swap the exe, relaunch. Paths go via env vars (no quoting issues).
         let script = "Wait-Process -Id $env:NP_PID -ErrorAction SilentlyContinue; \
                       Expand-Archive -LiteralPath $env:NP_ZIP -DestinationPath $env:NP_DIR -Force; \
+                      Copy-Item -LiteralPath $env:NP_EXE -Destination ($env:NP_EXE + '.bak') -Force; \
                       Copy-Item -LiteralPath (Join-Path $env:NP_DIR 'NetPulse.exe') -Destination $env:NP_EXE -Force; \
                       Start-Process -FilePath $env:NP_EXE";
         Command::new("powershell.exe")
@@ -148,4 +216,26 @@ pub fn check_async(manual: bool) {
         }
         BUSY.store(false, Ordering::SeqCst);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numeric_not_lexical() {
+        assert!(is_newer("0.10.0", "0.9.9"));
+        assert!(is_newer("v1.0.0", "0.9.9"));
+        assert!(!is_newer("0.1.0", "0.1.0"));
+        assert!(!is_newer("0.1.0", "0.1.1"));
+        assert!(is_newer("0.1.1", "0.1"));
+    }
+
+    #[test]
+    fn prerelease_ordering() {
+        assert!(is_newer("0.2.0", "0.2.0-beta.1"));
+        assert!(!is_newer("0.2.0-beta.1", "0.2.0"));
+        assert!(is_newer("0.2.0-beta.2", "0.2.0-beta.1"));
+        assert!(is_newer("0.2.0-beta.1", "0.1.9"));
+    }
 }

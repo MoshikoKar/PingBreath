@@ -28,3 +28,6 @@ Desktop.ini
 # Rust / tooling
 **/*.rs.bk
 .cargo-cache/
+
+# Drafts (work-in-progress notes, not published)
+*draft*

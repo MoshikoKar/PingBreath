@@ -50,7 +50,6 @@ pub fn save(map: &HashMap<String, Vec<Bucket>>) {
 pub struct Summary {
     pub sent: u64,
     pub uptime_pct: f32,
-    pub avg_ms: f32,
     pub max_ms: u32,
     /// 24 hourly health codes, oldest first: 0 no data, 1 good, 2 degraded, 3 bad.
     pub hours: Vec<i32>,
@@ -58,7 +57,7 @@ pub struct Summary {
 
 pub fn summarize(buckets: &[Bucket]) -> Summary {
     let now = now_minute();
-    let (mut sent, mut recv, mut sum, mut max) = (0u64, 0u64, 0u64, 0u32);
+    let (mut sent, mut recv, mut max) = (0u64, 0u64, 0u32);
     let mut hours = vec![(0u64, 0u64, 0u64); 24]; // sent, recv, sum per hour
 
     for b in buckets {
@@ -67,7 +66,6 @@ pub fn summarize(buckets: &[Bucket]) -> Summary {
         }
         sent += b.sent as u64;
         recv += b.recv as u64;
-        sum += b.sum_ms;
         max = max.max(b.max_ms);
         let age = now.saturating_sub(b.minute);
         let slot = 23 - (age / 60).min(23) as usize; // 23 = most recent hour
@@ -97,8 +95,37 @@ pub fn summarize(buckets: &[Bucket]) -> Summary {
     Summary {
         sent,
         uptime_pct: if sent == 0 { 0.0 } else { 100.0 * recv as f32 / sent as f32 },
-        avg_ms: if recv == 0 { 0.0 } else { sum as f32 / recv as f32 },
         max_ms: max,
         hours: codes,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_is_no_data() {
+        let s = summarize(&[]);
+        assert_eq!(s.sent, 0);
+        assert!(s.hours.iter().all(|&h| h == 0));
+    }
+
+    #[test]
+    fn uptime_and_max_and_recent_hour() {
+        let now = now_minute();
+        let b = Bucket { minute: now, sent: 10, recv: 9, sum_ms: 90, max_ms: 25 };
+        let s = summarize(&[b]);
+        assert_eq!(s.sent, 10);
+        assert!((s.uptime_pct - 90.0).abs() < 0.01);
+        assert_eq!(s.max_ms, 25);
+        assert_eq!(s.hours[23], 3); // 10 % loss is "bad"
+    }
+
+    #[test]
+    fn old_buckets_ignored() {
+        let now = now_minute();
+        let b = Bucket { minute: now.saturating_sub(MINUTES_24H + 5), sent: 5, recv: 5, sum_ms: 5, max_ms: 1 };
+        assert_eq!(summarize(&[b]).sent, 0);
     }
 }

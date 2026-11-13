@@ -160,12 +160,14 @@ export component MainWindow inherits Window {
     in property <int> overall: 0;
     in-out property <bool> on-top: true;
     in-out property <bool> locked: false;
+    in-out property <bool> startup: false;
 
     callback drag(length, length);
     callback hide-clicked();
     callback quit-clicked();
     callback toggle-top();
     callback toggle-lock();
+    callback toggle-startup();
     callback edit-config();
     callback reload-config();
     callback check-update();
@@ -263,6 +265,10 @@ export component MainWindow inherits Window {
                 MenuItem {
                     title: root.locked ? "✓ Lock position" : "Lock position";
                     activated => { root.toggle-lock(); }
+                }
+                MenuItem {
+                    title: root.startup ? "✓ Start with Windows" : "Start with Windows";
+                    activated => { root.toggle-startup(); }
                 }
                 MenuSeparator {}
                 MenuItem {
