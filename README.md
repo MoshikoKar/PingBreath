@@ -1,4 +1,6 @@
-# NetPulse
+# PingBreath
+
+Formerly NetPulse (renamed in v0.3.0 to avoid confusion with other tools of the same name). Existing installs update automatically and keep their settings.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
@@ -8,26 +10,26 @@ checksum-verified self-update from GitHub Releases.
 
 ## Description
 
-NetPulse sits in the system tray and opens a compact always-on-top panel that
+PingBreath sits in the system tray and opens a compact always-on-top panel that
 pings configurable targets (default gateway, plus hosts such as Google DNS and
 Cloudflare). It shows per-target latency, loss, jitter, and a rolling daily
 summary so you can spot Wi-Fi or ISP issues quickly. It has no taskbar button;
 the tray icon is the only way in and the only way to quit.
 
-Settings and history live under `%APPDATA%\NetPulse` by default. A portable
+Settings and history live under `%APPDATA%\PingBreath` by default. A portable
 build keeps them in `data\` next to the executable when `portable.txt` is present.
 
 ## Installation
 
 ### Prebuilt release
 
-Download from the [latest release](https://github.com/MoshikoKar/NetPulse/releases/latest):
+Download from the [latest release](https://github.com/MoshikoKar/PingBreath/releases/latest):
 
-- `NetPulse-Setup.exe` - per-user installer (no admin rights), optional start with Windows
-- `NetPulse-portable.zip` - unzip anywhere and run; settings stay beside the exe
+- `PingBreath-Setup.exe` - per-user installer (no admin rights), optional start with Windows
+- `PingBreath-portable.zip` - unzip anywhere and run; settings stay beside the exe
 
 Each release lists the SHA-256 of both files (also in `SHA256SUMS.txt`). Verify with
-`certutil -hashfile NetPulse-Setup.exe SHA256`.
+`certutil -hashfile PingBreath-Setup.exe SHA256`.
 
 > **SmartScreen:** the binaries are not code-signed yet, so Windows may show
 > "Windows protected your PC". Choose *More info -> Run anyway* after checking the hash.
@@ -41,8 +43,8 @@ Requirements:
 - [Inno Setup 6](https://jrsoftware.org/isinfo.php) only if you want the installer
 
 ```powershell
-git clone https://github.com/MoshikoKar/NetPulse.git
-cd NetPulse
+git clone https://github.com/MoshikoKar/PingBreath.git
+cd PingBreath
 cargo build --release
 ```
 
@@ -53,7 +55,7 @@ Release packaging (exe, portable zip, setup if Inno Setup is installed, checksum
 # or: .\build.ps1 -SkipSetup
 ```
 
-Artifacts are written to `dist/`. Close a running NetPulse first (tray icon -> Quit),
+Artifacts are written to `dist/`. Close a running PingBreath first (tray icon -> Quit),
 otherwise the build cannot overwrite the exe.
 
 ## Usage
@@ -68,7 +70,7 @@ The **X** on the panel only hides it. Right-click either the tray icon or the pa
 
 ### Configuration
 
-`%APPDATA%\NetPulse\config.json` (or `data\config.json` in portable mode). Missing keys use defaults.
+`%APPDATA%\PingBreath\config.json` (or `data\config.json` in portable mode). Missing keys use defaults.
 
 ```json
 {
@@ -104,7 +106,7 @@ Use *Reload config* in the menu after editing.
 *Check for updates* (and the automatic check) read the latest GitHub release. Before
 anything is run, the download is checked against that release's `SHA256SUMS.txt`; a
 missing or mismatching checksum aborts the update. Installed copies run the new setup
-silently; portable copies swap the exe and keep the old one as `NetPulse.exe.bak`.
+silently; portable copies swap the exe and keep the old one as `PingBreath.exe.bak`.
 
 ## Features
 
@@ -132,7 +134,7 @@ CI (`.github/workflows/ci.yml`) runs `cargo test` and `cargo clippy` on every pu
 - [Slint](https://slint.dev/) UI
 - `tray-icon` for the system tray
 - Windows crates (`windows`, Win32 ICMP / window APIs)
-- Inno Setup installer (`installer/NetPulse.iss`)
+- Inno Setup installer (`installer/PingBreath.iss`)
 - GitHub Actions (CI + release)
 
 ## Contributing

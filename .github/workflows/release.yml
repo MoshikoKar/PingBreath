@@ -1,5 +1,6 @@
 # Push a tag like v0.1.1 (matching Cargo.toml) to build and publish a release.
-# The in-app updater downloads NetPulse-Setup.exe / NetPulse-portable.zip from the latest release.
+# The in-app updater downloads PingBreath-Setup.exe / PingBreath-portable.zip from the latest release.
+# LEGACY(NetPulse): remove in v0.3.1 - also publish NetPulse-Setup.exe / NetPulse-portable.zip for v0.1/v0.2 clients.
 name: release
 on:
   push:
@@ -30,9 +31,10 @@ jobs:
           $m = [regex]::Match($log, "(?ms)^## \[$([regex]::Escape($ver))\][^\n]*\n(.*?)(?=^## \[|\z)")
           $changes = if ($m.Success) { $m.Groups[1].Value.Trim() } else { "See the commit history." }
           $fence = '`' * 3
-          $notes = "## Changes`n`n$changes`n`n## Downloads`n- **NetPulse-Setup.exe** - installer (per-user, optional start with Windows)`n- **NetPulse-portable.zip** - no install; settings kept next to the exe`n`n## SHA-256`n$fence`n$sums$fence`n"
+          # LEGACY(NetPulse): remove in v0.3.1 - drop the NetPulse download bullets and asset paths below.
+          $notes = "## Changes`n`n$changes`n`n## Downloads`n- **PingBreath-Setup.exe** - installer (per-user, optional start with Windows)`n- **PingBreath-portable.zip** - no install; settings kept next to the exe`n- **NetPulse-Setup.exe** / **NetPulse-portable.zip** - legacy bridge for v0.1/v0.2 self-update (same bits; removable after v0.3.x)`n`n## SHA-256`n$fence`n$sums$fence`n"
           Set-Content -Path notes.md -Value $notes
-          $files = @('dist/NetPulse-Setup.exe', 'dist/NetPulse-portable.zip', 'dist/SHA256SUMS.txt')
-          $opts = @('--title', "NetPulse ${{ github.ref_name }}", '--notes-file', 'notes.md')
+          $files = @('dist/PingBreath-Setup.exe', 'dist/PingBreath-portable.zip', 'dist/NetPulse-Setup.exe', 'dist/NetPulse-portable.zip', 'dist/SHA256SUMS.txt')
+          $opts = @('--title', "PingBreath ${{ github.ref_name }}", '--notes-file', 'notes.md')
           if ($ver -match '-') { $opts += '--prerelease' }
           gh release create "${{ github.ref_name }}" @files @opts

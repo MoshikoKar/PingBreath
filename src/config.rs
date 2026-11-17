@@ -4,6 +4,9 @@ use std::path::PathBuf;
 /// Host value that means "auto-detect the default gateway".
 pub const GATEWAY: &str = "gateway";
 const MAX_TARGETS: usize = 8;
+const APP_DIR: &str = "PingBreath";
+// LEGACY(NetPulse): remove in v0.3.1
+const LEGACY_APP_DIR: &str = "NetPulse";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Target {
@@ -66,14 +69,43 @@ pub fn is_portable() -> bool {
     exe_dir().is_some_and(|d| d.join("portable.txt").exists())
 }
 
+fn appdata_base() -> PathBuf {
+    std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
+}
+
 pub fn path() -> PathBuf {
     if is_portable() {
         if let Some(d) = exe_dir() {
             return d.join("data").join("config.json");
         }
     }
-    let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-    base.join("NetPulse").join("config.json")
+    appdata_base().join(APP_DIR).join("config.json")
+}
+
+/// If `%APPDATA%\PingBreath` has no config yet but the legacy AppData folder does, copy
+/// `config.json` and `history.json` over (old folder is left in place).
+pub fn migrate_from_legacy_appdata() {
+    if is_portable() {
+        return;
+    }
+    let new_dir = appdata_base().join(APP_DIR);
+    let new_cfg = new_dir.join("config.json");
+    if new_cfg.exists() {
+        return;
+    }
+    // LEGACY(NetPulse): remove in v0.3.1
+    let old_dir = appdata_base().join(LEGACY_APP_DIR);
+    if !old_dir.is_dir() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(&new_dir);
+    for name in ["config.json", "history.json"] {
+        let src = old_dir.join(name);
+        let dst = new_dir.join(name);
+        if src.is_file() && !dst.exists() {
+            let _ = std::fs::copy(&src, &dst);
+        }
+    }
 }
 
 /// Router must exist and come first; drop blank/duplicate entries; cap the count.
@@ -98,6 +130,7 @@ pub(crate) fn normalize(c: &mut Config) {
 }
 
 pub fn load() -> Config {
+    migrate_from_legacy_appdata();
     let p = path();
     match std::fs::read_to_string(&p).ok().and_then(|s| serde_json::from_str::<Config>(&s).ok()) {
         Some(mut c) => {
@@ -122,7 +155,7 @@ pub fn save(c: &Config) {
     }
 }
 
-/// Load, modify, save — used for position / toggle changes.
+/// Load, modify, save - used for position / toggle changes.
 pub fn update(f: impl FnOnce(&mut Config)) {
     let mut c = load();
     f(&mut c);

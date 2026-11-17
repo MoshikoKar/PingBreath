@@ -1,7 +1,8 @@
 <#
   Cut a release: bump Cargo.toml, commit, tag vX.Y.Z, push. GitHub Actions
-  (.github/workflows/release.yml) then builds and publishes NetPulse-Setup.exe +
-  NetPulse-portable.zip, and every installed client sees it via "Check for updates".
+  (.github/workflows/release.yml) then builds and publishes PingBreath-Setup.exe +
+  PingBreath-portable.zip, and every installed client sees it via "Check for updates".
+  LEGACY(NetPulse): remove in v0.3.1 - v0.3.0 also publishes NetPulse-* bridge assets via build.ps1.
 
   .\release.ps1 -Bump patch      0.1.0 -> 0.1.1   (also: minor, major)
   .\release.ps1 -Version 0.2.0   explicit version

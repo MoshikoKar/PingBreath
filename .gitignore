@@ -2,6 +2,8 @@
 /dist
 
 # Local / packaged binaries (built via build.ps1)
+/PingBreath.exe
+# LEGACY(NetPulse): remove in v0.3.1
 /NetPulse.exe
 *.exe
 !installer/
