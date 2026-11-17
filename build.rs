@@ -6,8 +6,8 @@ fn main() {
     {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/icon.ico");
-        res.set("ProductName", "NetPulse");
-        res.set("FileDescription", "NetPulse network quality widget");
+        res.set("ProductName", "PingBreath");
+        res.set("FileDescription", "PingBreath network quality widget");
         if let Err(e) = res.compile() {
             println!("cargo:warning=could not embed icon: {e}");
         }

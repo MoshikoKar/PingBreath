@@ -3,6 +3,23 @@
 All notable changes. Format: `## [version] - date`. The release workflow publishes the section
 matching the tag as the release notes, so add the section **before** running `release.ps1`.
 
+## [0.3.0] - 2026-11-17
+
+### Changed
+- Renamed the app from NetPulse to PingBreath (package, UI, installer, release assets, docs).
+- Settings now live under `%APPDATA%\PingBreath`. On first start, `config.json` and `history.json`
+  are copied from `%APPDATA%\NetPulse` when present (the old folder is left untouched).
+- "Start with Windows" writes the `PingBreath` Run value and removes a leftover `NetPulse` entry.
+- Self-updater looks at `MoshikoKar/PingBreath` and the `PingBreath-*` assets; portable updates
+  write `PingBreath.exe` (and drop a leftover `NetPulse.exe` when upgrading an old portable layout).
+- Single-instance mutex is `Local\PingBreath.SingleInstance` (also claims the old mutex so both
+  builds cannot run at once).
+
+### Notes
+- v0.3.0 also publishes legacy `NetPulse-Setup.exe` / `NetPulse-portable.zip` assets so existing
+  v0.1/v0.2 clients can self-update. Those bridge assets and the in-app migration shims are
+  scheduled for removal in v0.3.1.
+
 ## [0.2.0] - 2026-11-14
 
 ### Added

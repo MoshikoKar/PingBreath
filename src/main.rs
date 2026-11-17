@@ -35,7 +35,7 @@ fn hide_from_taskbar() {
     use windows::Win32::UI::WindowsAndMessaging::*;
     use windows::core::w;
     unsafe {
-        if let Ok(hwnd) = FindWindowW(None, w!("NetPulse")) {
+        if let Ok(hwnd) = FindWindowW(None, w!("PingBreath")) {
             let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             let want = (ex | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
             if want != ex {
@@ -46,6 +46,42 @@ fn hide_from_taskbar() {
             }
         }
     }
+}
+
+/// After a v0.1/v0.2 portable update the binary may still be named NetPulse.exe.
+/// Copy to PingBreath.exe, relaunch, and remove the old file once we exit.
+/// LEGACY(NetPulse): remove in v0.3.1
+fn migrate_legacy_exe_name() {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(name) = exe.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    if !name.eq_ignore_ascii_case("NetPulse.exe") {
+        return;
+    }
+    let target = exe.with_file_name("PingBreath.exe");
+    if !target.exists() {
+        if std::fs::copy(&exe, &target).is_err() {
+            return;
+        }
+    }
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let _ = Command::new(&target).args(&args).creation_flags(sys::NO_WINDOW).spawn();
+    let script = "Wait-Process -Id $env:PB_PID -ErrorAction SilentlyContinue; \
+                  Start-Sleep -Seconds 1; \
+                  Remove-Item -LiteralPath $env:PB_OLD -Force -ErrorAction SilentlyContinue";
+    let _ = Command::new("powershell.exe")
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .env("PB_PID", std::process::id().to_string())
+        .env("PB_OLD", &exe)
+        .creation_flags(sys::NO_WINDOW)
+        .spawn();
+    std::process::exit(0);
 }
 
 fn tray_icon_image() -> Icon {
@@ -132,11 +168,15 @@ fn snapshot_history(workers: &[Worker]) -> HashMap<String, Vec<history::Bucket>>
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    // LEGACY(NetPulse): remove in v0.3.1
+    migrate_legacy_exe_name();
     // One instance only; `--wait` (used by Reload) waits for the old instance to exit.
     let _instance = match sys::single_instance(std::env::args().any(|a| a == "--wait")) {
         Some(g) => g,
         None => return Ok(()),
     };
+    // LEGACY(NetPulse): remove in v0.3.1
+    sys::migrate_startup_run_value();
     let cfg = config::load();
     let stop = Arc::new(AtomicBool::new(false));
 
@@ -217,7 +257,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let _tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
-        .with_tooltip("NetPulse")
+        .with_tooltip("PingBreath")
         .with_icon(tray_icon_image())
         .build()
         .expect("tray icon");
@@ -416,7 +456,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     let since = *bad_since.get_or_insert_with(Instant::now);
                     if !notified && since.elapsed() >= hold {
                         notified = true;
-                        sys::toast("NetPulse: connection problem", &format!("Unreachable / bad: {}", bad_names.join(", ")));
+                        sys::toast("PingBreath: connection problem", &format!("Unreachable / bad: {}", bad_names.join(", ")));
                     }
                 } else if worst > 0 {
                     bad_since = None;
@@ -425,7 +465,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         if since.elapsed() >= hold {
                             notified = false;
                             ok_since = None;
-                            sys::toast("NetPulse: back to normal", "All targets are responding again.");
+                            sys::toast("PingBreath: back to normal", "All targets are responding again.");
                         }
                     }
                 }

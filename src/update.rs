@@ -2,8 +2,11 @@
 //! so no extra HTTP/TLS dependencies are needed.
 //!
 //! Release assets expected (see build.ps1 / .github/workflows/release.yml):
-//!   NetPulse-Setup.exe     installer      -> used when installed via the setup
-//!   NetPulse-portable.zip  NetPulse.exe + portable.txt -> used in portable mode
+//!   PingBreath-Setup.exe     installer      -> used when installed via the setup
+//!   PingBreath-portable.zip  PingBreath.exe + portable.txt -> used in portable mode
+//!
+//! LEGACY(NetPulse): remove in v0.3.1 - also publish NetPulse-Setup.exe /
+//! NetPulse-portable.zip (zip member NetPulse.exe) for v0.1/v0.2 clients.
 
 use std::os::windows::process::CommandExt;
 use std::process::Command;
@@ -12,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::PCWSTR;
 
-pub const REPO: &str = "MoshikoKar/NetPulse";
+pub const REPO: &str = "MoshikoKar/PingBreath";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 use crate::sys::NO_WINDOW;
 
@@ -61,7 +64,7 @@ fn installed_via_setup() -> bool {
 
 fn curl(args: &[&str]) -> Result<Vec<u8>, String> {
     let out = Command::new("curl.exe")
-        .args(["-sSL", "--fail", "--max-time", "120", "-H", "User-Agent: NetPulse-updater"])
+        .args(["-sSL", "--fail", "--max-time", "120", "-H", "User-Agent: PingBreath-updater"])
         .args(args)
         .creation_flags(NO_WINDOW)
         .output()
@@ -85,7 +88,7 @@ fn latest() -> Result<Release, String> {
     // beta channel: newest release of any kind (the list is newest first)
     let j = if beta { j.get(0).cloned().ok_or("no releases published")? } else { j };
     let tag = j["tag_name"].as_str().ok_or("release has no tag")?.to_string();
-    let wanted = if installed_via_setup() { "NetPulse-Setup.exe" } else { "NetPulse-portable.zip" };
+    let wanted = if installed_via_setup() { "PingBreath-Setup.exe" } else { "PingBreath-portable.zip" };
     let find = |name: &str| {
         j["assets"]
             .as_array()
@@ -140,7 +143,7 @@ fn download_verified(rel: &Release, dest: &std::path::Path) -> Result<(), String
 
 fn message_box(text: &str, flags: MESSAGEBOX_STYLE) -> MESSAGEBOX_RESULT {
     let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
-    let (t, c) = (wide(text), wide("NetPulse"));
+    let (t, c) = (wide(text), wide("PingBreath"));
     unsafe { MessageBoxW(None, PCWSTR(t.as_ptr()), PCWSTR(c.as_ptr()), flags | MB_TOPMOST | MB_SETFOREGROUND) }
 }
 
@@ -149,33 +152,41 @@ fn info(text: &str) {
 }
 
 fn apply(rel: &Release) -> Result<(), String> {
-    let tmp = std::env::temp_dir().join("NetPulse-update");
+    let tmp = std::env::temp_dir().join("PingBreath-update");
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
 
     if installed_via_setup() {
-        let setup = tmp.join("NetPulse-Setup.exe");
+        let setup = tmp.join("PingBreath-Setup.exe");
         download_verified(rel, &setup)?;
         Command::new(&setup)
             .args(["/SILENT", "/CLOSEAPPLICATIONS", "/NORESTART"])
             .spawn()
             .map_err(|e| format!("Could not start installer: {e}"))?;
     } else {
-        let zip = tmp.join("NetPulse-portable.zip");
+        let zip = tmp.join("PingBreath-portable.zip");
         download_verified(rel, &zip)?;
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        // Wait for this process to exit, swap the exe, relaunch. Paths go via env vars (no quoting issues).
-        let script = "Wait-Process -Id $env:NP_PID -ErrorAction SilentlyContinue; \
-                      Expand-Archive -LiteralPath $env:NP_ZIP -DestinationPath $env:NP_DIR -Force; \
-                      Copy-Item -LiteralPath $env:NP_EXE -Destination ($env:NP_EXE + '.bak') -Force; \
-                      Copy-Item -LiteralPath (Join-Path $env:NP_DIR 'NetPulse.exe') -Destination $env:NP_EXE -Force; \
-                      Start-Process -FilePath $env:NP_EXE";
+        // Extract PingBreath.exe, write it next to the running exe (renaming off a legacy
+        // NetPulse.exe layout when needed), relaunch, then remove the old exe name.
+        // LEGACY(NetPulse): remove in v0.3.1 - the NetPulse.exe branch below.
+        let script = "Wait-Process -Id $env:PB_PID -ErrorAction SilentlyContinue; \
+                      Expand-Archive -LiteralPath $env:PB_ZIP -DestinationPath $env:PB_DIR -Force; \
+                      $dir = Split-Path -LiteralPath $env:PB_EXE; \
+                      $target = Join-Path $dir 'PingBreath.exe'; \
+                      Copy-Item -LiteralPath $env:PB_EXE -Destination ($env:PB_EXE + '.bak') -Force; \
+                      Copy-Item -LiteralPath (Join-Path $env:PB_DIR 'PingBreath.exe') -Destination $target -Force; \
+                      Start-Process -FilePath $target; \
+                      if ((Split-Path -Leaf $env:PB_EXE) -ieq 'NetPulse.exe') { \
+                        Start-Sleep -Seconds 2; \
+                        Remove-Item -LiteralPath $env:PB_EXE -Force -ErrorAction SilentlyContinue \
+                      }";
         Command::new("powershell.exe")
             .args(["-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", script])
-            .env("NP_PID", std::process::id().to_string())
-            .env("NP_ZIP", &zip)
-            .env("NP_DIR", tmp.join("x"))
-            .env("NP_EXE", &exe)
+            .env("PB_PID", std::process::id().to_string())
+            .env("PB_ZIP", &zip)
+            .env("PB_DIR", tmp.join("x"))
+            .env("PB_EXE", &exe)
             .creation_flags(NO_WINDOW)
             .spawn()
             .map_err(|e| format!("Could not start updater: {e}"))?;
@@ -199,12 +210,12 @@ pub fn check_async(manual: bool) {
             }
             Ok(rel) if !is_newer(&rel.version, VERSION) => {
                 if manual {
-                    info(&format!("NetPulse {VERSION} is up to date."));
+                    info(&format!("PingBreath {VERSION} is up to date."));
                 }
             }
             Ok(rel) => {
                 let q = format!(
-                    "NetPulse {} is available (you have {VERSION}).\n\nUpdate now? The app will restart.\n\nRelease notes: {}",
+                    "PingBreath {} is available (you have {VERSION}).\n\nUpdate now? The app will restart.\n\nRelease notes: {}",
                     rel.version, rel.notes_url
                 );
                 if message_box(&q, MB_YESNO | MB_ICONQUESTION) == IDYES {
