@@ -3,6 +3,20 @@
 All notable changes. Format: `## [version] - date`. The release workflow publishes the section
 matching the tag as the release notes, so add the section **before** running `release.ps1`.
 
+## [Unreleased]
+
+## [0.4.0] - 2026-11-19
+
+### Added
+- Hover the 24-hour health strip to see local-time range, loss/down runs, and per-hour stats.
+
+### Changed
+- Updater shows download/verify toasts and a final "ready to restart" confirm before quitting.
+- Updater maps GitHub HTTP failures by status (private/unreachable 404 vs rate limit) instead of a
+  generic curl failure.
+- Portable relaunch retries several times and shows an error dialog with a log path if restart fails.
+- Beta channel skips draft releases when listing from the API.
+
 ## [0.3.0] - 2026-11-17
 
 ### Changed

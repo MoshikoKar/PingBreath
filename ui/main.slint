@@ -7,6 +7,7 @@
     status: int,        // 0 waiting, 1 good, 2 degraded, 3 bad
     spark: string,
     hours: [int],       // 24 hourly health codes, oldest first
+    tips: [string],     // hover details per hourly segment
 }
 
 global Palette {
@@ -55,6 +56,7 @@ component IconButton inherits Rectangle {
 component Row inherits Rectangle {
     in property <TargetView> t;
     property <color> accent: Palette.status-color(t.status);
+    property <int> hover-idx: -1;
 
     height: 62px;
     border-radius: 8px;
@@ -122,12 +124,26 @@ component Row inherits Rectangle {
         }
 
         // 24 h health strip, one segment per hour
-        HorizontalLayout {
+        Rectangle {
             height: 3px;
-            spacing: 1px;
-            for h in t.hours: Rectangle {
-                border-radius: 1px;
-                background: h == 0 ? #ffffff14 : Palette.status-color(h);
+            HorizontalLayout {
+                spacing: 1px;
+                for h[i] in t.hours: Rectangle {
+                    border-radius: 1px;
+                    background: h == 0 ? #ffffff14 : Palette.status-color(h);
+                    opacity: root.hover-idx == -1 || root.hover-idx == i ? 1.0 : 0.45;
+                }
+            }
+            // generous hit area around the thin strip; segment = hovered x / width
+            TouchArea {
+                y: -5px;
+                height: parent.height + 10px;
+                width: parent.width;
+                mouse-cursor: pointer;
+                changed has-hover => { if (!self.has-hover) { root.hover-idx = -1; } }
+                moved => {
+                    root.hover-idx = max(0, min(23, floor(self.mouse-x / self.width * 24)));
+                }
             }
         }
 
@@ -136,13 +152,15 @@ component Row inherits Rectangle {
             height: 11px;
             spacing: 6px;
             Text {
-                text: t.live;
-                color: Palette.muted;
+                text: root.hover-idx >= 0 ? t.tips[root.hover-idx] : t.live;
+                color: root.hover-idx >= 0 ? Palette.text : Palette.muted;
+                overflow: elide;
                 font-size: 8px;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
             Text {
+                visible: root.hover-idx < 0;
                 text: t.summary24;
                 color: Palette.muted;
                 font-size: 8px;

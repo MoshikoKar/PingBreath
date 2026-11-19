@@ -62,17 +62,73 @@ fn installed_via_setup() -> bool {
     crate::config::exe_dir().is_some_and(|d| d.join("unins000.exe").exists())
 }
 
-fn curl(args: &[&str]) -> Result<Vec<u8>, String> {
+/// GET (or download with `-o`) via curl; returns HTTP status and body (empty when `-o` is used).
+fn curl(args: &[&str]) -> Result<(u16, Vec<u8>), String> {
     let out = Command::new("curl.exe")
-        .args(["-sSL", "--fail", "--max-time", "120", "-H", "User-Agent: PingBreath-updater"])
+        .args([
+            "-sSL",
+            "--max-time",
+            "120",
+            "-w",
+            "\n%{http_code}",
+            "-H",
+            "User-Agent: PingBreath-updater",
+        ])
         .args(args)
         .creation_flags(NO_WINDOW)
         .output()
         .map_err(|e| format!("could not run curl: {e}"))?;
-    if out.status.success() {
-        Ok(out.stdout)
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if err.is_empty() {
+            "curl failed".into()
+        } else {
+            err
+        });
+    }
+    let stdout = out.stdout;
+    let nl = stdout
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .ok_or_else(|| "curl returned no HTTP status".to_string())?;
+    let code: u16 = std::str::from_utf8(&stdout[nl + 1..])
+        .unwrap_or("")
+        .trim()
+        .parse()
+        .map_err(|_| "curl returned invalid HTTP status".to_string())?;
+    Ok((code, stdout[..nl].to_vec()))
+}
+
+fn map_http(code: u16, context: &str) -> String {
+    match code {
+        404 => format!(
+            "{context}: GitHub returned 404. If the repository is private, release metadata is not \
+             reachable without auth (tokenless updater). Making Releases public, or publishing a \
+             public update manifest, is required."
+        ),
+        403 | 429 => format!("{context}: GitHub rate limit or forbidden (HTTP {code}). Try again later."),
+        401 => format!("{context}: GitHub unauthorized (HTTP 401)."),
+        c if (500..600).contains(&c) => format!("{context}: GitHub server error (HTTP {c}). Try again later."),
+        c => format!("{context}: HTTP {c}"),
+    }
+}
+
+fn curl_body(url: &str) -> Result<Vec<u8>, String> {
+    let (code, body) = curl(&[url])?;
+    if code == 200 {
+        Ok(body)
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        Err(map_http(code, "Could not reach GitHub"))
+    }
+}
+
+fn curl_download(url: &str, dest: &std::path::Path) -> Result<(), String> {
+    let (code, _) = curl(&["-o", &dest.to_string_lossy(), url])?;
+    if code == 200 {
+        Ok(())
+    } else {
+        let _ = std::fs::remove_file(dest);
+        Err(map_http(code, "Download failed"))
     }
 }
 
@@ -83,12 +139,23 @@ fn latest() -> Result<Release, String> {
     } else {
         format!("https://api.github.com/repos/{REPO}/releases/latest")
     };
-    let body = curl(&[&api]).map_err(|e| format!("Could not reach GitHub: {e}"))?;
+    let body = curl_body(&api)?;
     let j: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-    // beta channel: newest release of any kind (the list is newest first)
-    let j = if beta { j.get(0).cloned().ok_or("no releases published")? } else { j };
+    // beta channel: newest non-draft release of any kind (list is newest first)
+    let j = if beta {
+        j.as_array()
+            .and_then(|a| a.iter().find(|r| r["draft"].as_bool() != Some(true)))
+            .cloned()
+            .ok_or_else(|| "no releases published".to_string())?
+    } else {
+        j
+    };
     let tag = j["tag_name"].as_str().ok_or("release has no tag")?.to_string();
-    let wanted = if installed_via_setup() { "PingBreath-Setup.exe" } else { "PingBreath-portable.zip" };
+    let wanted = if installed_via_setup() {
+        "PingBreath-Setup.exe"
+    } else {
+        "PingBreath-portable.zip"
+    };
     let find = |name: &str| {
         j["assets"]
             .as_array()
@@ -100,8 +167,9 @@ fn latest() -> Result<Release, String> {
         version: tag.trim_start_matches('v').to_string(),
         url: find(wanted).ok_or_else(|| format!("release {tag} has no {wanted} asset"))?,
         asset: wanted.to_string(),
-        sums_url: find("SHA256SUMS.txt")
-            .ok_or_else(|| format!("release {tag} has no SHA256SUMS.txt - refusing to update unverified"))?,
+        sums_url: find("SHA256SUMS.txt").ok_or_else(|| {
+            format!("release {tag} has no SHA256SUMS.txt - refusing to update unverified")
+        })?,
         notes_url: j["html_url"].as_str().unwrap_or("").to_string(),
     })
 }
@@ -122,7 +190,8 @@ fn sha256_of(path: &std::path::Path) -> Result<String, String> {
 
 /// Download `rel.url` to `dest` and check it against the release's SHA256SUMS.txt before anything runs.
 fn download_verified(rel: &Release, dest: &std::path::Path) -> Result<(), String> {
-    let sums = curl(&[&rel.sums_url]).map_err(|e| format!("Could not fetch checksums: {e}"))?;
+    crate::sys::toast("PingBreath", &format!("Downloading {}...", rel.asset));
+    let sums = curl_body(&rel.sums_url).map_err(|e| format!("Could not fetch checksums: {e}"))?;
     let expected = String::from_utf8_lossy(&sums)
         .lines()
         .filter_map(|l| {
@@ -132,11 +201,14 @@ fn download_verified(rel: &Release, dest: &std::path::Path) -> Result<(), String
         })
         .next()
         .ok_or_else(|| format!("SHA256SUMS.txt has no entry for {}", rel.asset))?;
-    curl(&["-o", &dest.to_string_lossy(), &rel.url]).map_err(|e| format!("Download failed: {e}"))?;
+    curl_download(&rel.url, dest)?;
+    crate::sys::toast("PingBreath", "Verifying download...");
     let actual = sha256_of(dest)?;
     if actual != expected {
         let _ = std::fs::remove_file(dest);
-        return Err(format!("Checksum mismatch - download discarded.\nexpected {expected}\nactual   {actual}"));
+        return Err(format!(
+            "Checksum mismatch - download discarded.\nexpected {expected}\nactual   {actual}"
+        ));
     }
     Ok(())
 }
@@ -159,6 +231,11 @@ fn apply(rel: &Release) -> Result<(), String> {
     if installed_via_setup() {
         let setup = tmp.join("PingBreath-Setup.exe");
         download_verified(rel, &setup)?;
+        let ready = "Update ready - PingBreath will close and restart after the installer finishes.\n\nContinue?";
+        if message_box(ready, MB_YESNO | MB_ICONINFORMATION) != IDYES {
+            let _ = std::fs::remove_file(&setup);
+            return Ok(());
+        }
         Command::new(&setup)
             .args(["/SILENT", "/CLOSEAPPLICATIONS", "/NORESTART"])
             .spawn()
@@ -167,16 +244,34 @@ fn apply(rel: &Release) -> Result<(), String> {
         let zip = tmp.join("PingBreath-portable.zip");
         download_verified(rel, &zip)?;
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let ready = "Update ready - PingBreath will close and restart.\n\nContinue?";
+        if message_box(ready, MB_YESNO | MB_ICONINFORMATION) != IDYES {
+            let _ = std::fs::remove_file(&zip);
+            return Ok(());
+        }
         // Extract PingBreath.exe, write it next to the running exe (renaming off a legacy
-        // NetPulse.exe layout when needed), relaunch, then remove the old exe name.
+        // NetPulse.exe layout when needed), relaunch with retries, then remove the old exe name.
         // LEGACY(NetPulse): remove in v0.3.1 - the NetPulse.exe branch below.
         let script = "Wait-Process -Id $env:PB_PID -ErrorAction SilentlyContinue; \
+                      Start-Sleep -Seconds 1; \
                       Expand-Archive -LiteralPath $env:PB_ZIP -DestinationPath $env:PB_DIR -Force; \
                       $dir = Split-Path -LiteralPath $env:PB_EXE; \
                       $target = Join-Path $dir 'PingBreath.exe'; \
                       Copy-Item -LiteralPath $env:PB_EXE -Destination ($env:PB_EXE + '.bak') -Force; \
                       Copy-Item -LiteralPath (Join-Path $env:PB_DIR 'PingBreath.exe') -Destination $target -Force; \
-                      Start-Process -FilePath $target; \
+                      $ok = $false; \
+                      for ($i = 0; $i -lt 5; $i++) { \
+                        try { Start-Process -FilePath $target; $ok = $true; break } \
+                        catch { Start-Sleep -Seconds 1 } \
+                      }; \
+                      if (-not $ok) { \
+                        $log = Join-Path $env:TEMP 'PingBreath-update-fail.log'; \
+                        \"Failed to relaunch $target\" | Set-Content -LiteralPath $log; \
+                        Add-Type -AssemblyName System.Windows.Forms; \
+                        [System.Windows.Forms.MessageBox]::Show( \
+                          \"PingBreath updated but could not restart. Start it manually.`n`nLog: $log\", \
+                          'PingBreath') \
+                      }; \
                       if ((Split-Path -Leaf $env:PB_EXE) -ieq 'NetPulse.exe') { \
                         Start-Sleep -Seconds 2; \
                         Remove-Item -LiteralPath $env:PB_EXE -Force -ErrorAction SilentlyContinue \
@@ -215,7 +310,9 @@ pub fn check_async(manual: bool) {
             }
             Ok(rel) => {
                 let q = format!(
-                    "PingBreath {} is available (you have {VERSION}).\n\nUpdate now? The app will restart.\n\nRelease notes: {}",
+                    "PingBreath {} is available (you have {VERSION}).\n\n\
+                     Download and install now? This may take a minute; the app will close and restart.\n\n\
+                     Release notes: {}",
                     rel.version, rel.notes_url
                 );
                 if message_box(&q, MB_YESNO | MB_ICONQUESTION) == IDYES {
@@ -248,5 +345,14 @@ mod tests {
         assert!(!is_newer("0.2.0-beta.1", "0.2.0"));
         assert!(is_newer("0.2.0-beta.2", "0.2.0-beta.1"));
         assert!(is_newer("0.2.0-beta.1", "0.1.9"));
+    }
+
+    #[test]
+    fn map_http_distinguishes_private_and_rate_limit() {
+        let m404 = map_http(404, "Could not reach GitHub");
+        assert!(m404.contains("404"));
+        assert!(m404.contains("private") || m404.contains("public"));
+        assert!(map_http(429, "Could not reach GitHub").contains("rate limit"));
+        assert!(map_http(403, "Could not reach GitHub").contains("403"));
     }
 }

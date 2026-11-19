@@ -157,6 +157,9 @@ fn build_view(w: &Worker, s: &ping::Stats) -> TargetView {
         status,
         spark: spark.into(),
         hours: ModelRc::new(VecModel::from(sum.hours)),
+        tips: ModelRc::new(VecModel::from(
+            sum.tips.into_iter().map(slint::SharedString::from).collect::<Vec<_>>(),
+        )),
     }
 }
 

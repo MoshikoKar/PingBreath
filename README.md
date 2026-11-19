@@ -112,7 +112,7 @@ silently; portable copies swap the exe and keep the old one as `PingBreath.exe.b
 
 - System-tray UI, always-on-top and lock, no taskbar button, single instance
 - ICMP latency monitoring via Windows IP Helper
-- Live sparkline, avg / jitter / loss, and 24-hour hourly health
+- Live sparkline, avg / jitter / loss, and 24-hour hourly health with hover loss details
 - Up to 8 targets with per-target thresholds; router target always first
 - Outage / recovery toast notifications
 - Start with Windows toggle
